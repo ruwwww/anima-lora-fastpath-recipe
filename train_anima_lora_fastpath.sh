@@ -3,7 +3,7 @@ set -e
 
 # ==============================================================================
 # Fast-Path Anima DiT LoRA Training Script (RTX 5060 Ti 16GB Sweet Spot)
-# Powered by sd-scripts fork: https://github.com/ruwwww/sd-scripts-fourtune
+# Powered by sd-scripts fork: https://github.com/ruwwww/sd-scripts
 # ==============================================================================
 
 PYTHON_ENV="/home/kuroko/.conda/envs/ai/bin/python"

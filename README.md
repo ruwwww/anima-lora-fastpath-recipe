@@ -2,7 +2,7 @@
 
 A production-validated, hardware-optimized training recipe for **Anima Base v1.0** (Cosmos 2 DiT architecture) LoRA finetuning on consumer **16GB VRAM GPUs (NVIDIA GeForce RTX 5060 Ti / RTX 4080 / RTX 4070 Ti Super)**.
 
-By leveraging **Selective Block Checkpointing** implemented in our [sd-scripts fork](https://github.com/ruwwww/sd-scripts-fourtune), this setup cuts training step latency from **2,134 ms down to 1,715 ms (~1.24x speedup)** by recovering **~327 ms of wasted recomputation time**, utilizing **~12.46 GiB VRAM** while leaving a safe **3.34 GiB headroom** to avoid allocator fragmentation.
+By leveraging **Selective Block Checkpointing** implemented in our [sd-scripts fork](https://github.com/ruwwww/sd-scripts), this setup cuts training step latency from **2,134 ms down to 1,715 ms (~1.24x speedup)** by recovering **~327 ms of wasted recomputation time**, utilizing **~12.46 GiB VRAM** while leaving a safe **3.34 GiB headroom** to avoid allocator fragmentation.
 
 ---
 
@@ -48,7 +48,7 @@ Measurements captured on NVIDIA RTX 5060 Ti (36 SMs, sm_120, PyTorch 2.13.0+cu13
 Clone the optimized fork containing native selective checkpointing controls:
 
 ```bash
-git clone -b feat/anima-selective-checkpointing https://github.com/ruwwww/sd-scripts-fourtune.git sd-scripts
+git clone -b feat/anima-selective-checkpointing https://github.com/ruwwww/sd-scripts.git sd-scripts
 cd sd-scripts
 pip install -r requirements.txt
 ```
@@ -137,4 +137,4 @@ python sd-scripts/anima_train_network.py \
 
 - [ComfyUI-Anima-BaryCache](https://github.com/ruwwww/ComfyUI-Anima-BaryCache): Inference acceleration node using stepwise barycentric extrapolation (2.24x speedup, down to ~8.4s per generation).
 - [anima-fastpath-recipe](https://github.com/ruwwww/anima-fastpath-recipe): Baseline eager & TorchCompile inference optimization recipes for Anima DiT.
-- [sd-scripts-fourtune](https://github.com/ruwwww/sd-scripts-fourtune): Optimized training scripts fork featuring selective gradient checkpointing.
+- [sd-scripts](https://github.com/ruwwww/sd-scripts): Optimized training scripts fork featuring selective gradient checkpointing.
