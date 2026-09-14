@@ -2,27 +2,34 @@
 
 A production-validated, hardware-optimized training recipe for **Anima Base v1.0** (Cosmos 2 DiT architecture) LoRA finetuning on consumer **16GB VRAM GPUs (NVIDIA GeForce RTX 5060 Ti / RTX 4080 / RTX 4070 Ti Super)**.
 
-By leveraging **Selective Block Checkpointing** implemented in our [sd-scripts fork](https://github.com/ruwwww/sd-scripts), this setup cuts training step latency from **2,134 ms down to 1,715 ms (~1.24x speedup)** by recovering **~327 ms of wasted recomputation time**, utilizing **~12.46 GiB VRAM** while leaving a safe **3.34 GiB headroom** to avoid allocator fragmentation.
+By combining the [sd-scripts fork](https://github.com/ruwwww/sd-scripts) features for **explicit-VJP LoRA/MLP kernels**, **row-wise Triton FP8 activation storage**, **direct FP8 MLP backward**, selective checkpointing, and per-block `torch.compile`, this setup reaches **~1,134 ms/step** on the target RTX 5060 Ti. That is about **27–28% faster** than the uncompiled direct-FP8 count-8 recipe while using **~12.70 GiB peak allocation** and retaining **~3.07 GiB measured headroom** to the physical GPU limit.
+
+The timings below are steady-state measurements after JIT warmup. The first pass through each resolution bucket is slower because Inductor compiles the block.
 
 ---
 
-## The Core Bottleneck: Recomputation vs. Idle VRAM
+## The Current Fast Path: Compile First, Then Spend the VRAM Budget
 
-Profiling the Anima DiT graph ($d=2048$, 28 blocks, 3,952 patch tokens at native 832x1216) on the RTX 5060 Ti reveals a stark trade-off:
+Profiling the Anima DiT graph ($d=2048$, 28 blocks, 3,952 patch tokens at native 832x1216) on the RTX 5060 Ti reveals that the old count-12-only recipe left useful performance on the table:
 
-1. **Full Gradient Checkpointing (28/28 blocks):**
-   - Peak VRAM is only **~5.19 GiB**.
-   - Over **10.5 GiB of GDDR7 VRAM sits idle and wasted**.
-   - The backward pass takes **1,457 ms (71.5% of total step time)** because every single transformer block forward pass must be recomputed from scratch during backward.
-2. **Zero Gradient Checkpointing (0/28 blocks):**
-   - Forward activation tensors for all 28 blocks accumulate simultaneously.
-   - Instantly crashes with **CUDA Out of Memory (OOM)** at **~14.99 GiB** on 16GB devices.
+1. **Uncompiled FP8 direct backward, count 8/28:**
+   - Stable at **~1,566 ms/step** and **~12.94 GiB peak allocation**.
+   - Direct backward avoids materializing the full BF16 GELU activation, but remaining transformer checkpointing still costs time.
+2. **Per-block `torch.compile`, count 1/28:**
+   - Stable at **~1,134 ms/step** and **~12.70 GiB peak allocation**.
+   - Only one transformer block is recomputed; compiled blocks reuse optimized graphs.
+3. **Compiled count 0/28:**
+   - Faster at **~1,088 ms/step**, but leaves only **~2.31 GiB actual headroom**.
+   - It is rejected for unattended training because allocator and bucket variation can trigger OOM.
 
-### The Measured Sweet Spot: 12 of 28 Blocks Checkpointed
+### The Measured Sweet Spots
 
-Because each block in the Anima model (`library/anima_models.py`) maintains an independent checkpointing gate, we can selectively checkpoint a deterministic subset of blocks:
-- **12 blocks checkpointed** (`[0, 2, 4, 7, 9, 11, 14, 16, 18, 21, 23, 25]`).
-- **16 blocks retain activations in VRAM** (zero backward recomputation for these blocks).
+Because each block in the Anima model (`library/anima_models.py`) maintains an independent checkpointing gate, the recipe can trade speed for memory deterministically:
+
+- **Fastest safe:** per-block compile + direct FP8 + **1/28 checkpoint**.
+- **Conservative compiled:** per-block compile + direct FP8 + **4/28 checkpoints**.
+- **No compile fallback:** direct FP8 + **8/28 checkpoints**.
+- **Research only:** compiled count 0/28; do not use as the unattended default.
 
 ---
 
@@ -30,25 +37,54 @@ Because each block in the Anima model (`library/anima_models.py`) maintains an i
 
 Measurements captured on NVIDIA RTX 5060 Ti (36 SMs, sm_120, PyTorch 2.13.0+cu130, CUDA 13.0, bf16, rank 16 LoRA, 3,952 patch tokens):
 
-| Configuration | Checkpointed Blocks | Backward Latency | Step Latency | Throughput | Speedup | Peak VRAM | Safety Margin (to 15.8 GiB) | Status |
-| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| **Zero Checkpointing** | 0 / 28 | — | — | — | — | >15.5 GiB | Negative | **CUDA OOM** |
-| **Threshold Minimum** | 7 / 28 | 1,029 ms | 1,612 ms | 0.62 it/s | 1.26x | 14.90 GiB | 0.90 GiB (Critical) | High OOM Risk |
-| **Even Count** | 10 / 28 | 1,091 ms | 1,674 ms | 0.60 it/s | 1.22x | 13.43 GiB | 2.37 GiB | Borderline |
-| **★ Optimal Sweet Spot** | **12 / 28** | **1,132 ms** | **1,715 ms** | **0.58 it/s** | **1.24x** | **12.46 GiB** | **3.34 GiB** | **Safe & Stable** |
-| **Interleaved 50%** | 14 / 28 | 1,173 ms | 1,756 ms | 0.57 it/s | 1.21x | 11.48 GiB | 4.32 GiB | Highly Conservative |
-| **Baseline Kohya** | 28 / 28 | 1,457 ms | 2,038 - 2,134 ms | 0.49 it/s | 1.00x | 5.19 GiB | 10.6 GiB (Wasted) | Slow Baseline |
+| Configuration | Checkpointed Blocks | Backward Latency | Step Latency | Throughput | Peak VRAM | Actual Headroom | Status |
+| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| Compiled count 0 | 0 / 28 | 639 ms | **1,088 ms** | 0.92 it/s | 13.48 GiB | 2.31 GiB | Reject |
+| **★ Compiled count 1** | **1 / 28** | **679 ms** | **1,134 ms** | **0.88 it/s** | **12.70 GiB** | **3.07 GiB** | **Fastest Safe** |
+| Compiled count 4 | 4 / 28 | 756 ms | 1,223 ms | 0.82 it/s | 11.83 GiB | 3.93 GiB | Conservative |
+| Compiled count 8 | 8 / 28 | 868 ms | 1,354 ms | 0.74 it/s | 10.67 GiB | 5.06 GiB | Maximum Margin |
+| Uncompiled direct FP8 count 8 | 8 / 28 | 997 ms | 1,566 ms | 0.64 it/s | 12.94 GiB | 2.84 GiB | Fallback |
 
-*Stability Note:* In a 15-step steady-state run, the 12-block configuration showed **0.0 MiB memory growth** and zero NaNs, proving no progressive buffer leakage.
+*Stability Note:* Compiled count-1 passed a 10-step/5-warmup soak with **0.0 MiB allocated/reserved growth**, finite gradients, and no NaNs. Compiled count-1 versus count-8 had maximum loss difference `0.00258` and maximum relative gradient-norm difference `0.15%` over the same short trajectory.
+
+## Recommended Fast Recipe
+
+Use this for a fixed target GPU/resolution after validating one short run:
+
+```bash
+python sd-scripts/anima_train_network.py \
+  ... \
+  --selective_checkpointing=count \
+  --checkpoint_blocks=1 \
+  --compile \
+  --compile_mode=default \
+  --compile_cache_size_limit=32 \
+  --fused_lora \
+  --fused_mlp \
+  --fused_mlp_storage=fp8 \
+  --fused_mlp_fp8_backend=triton \
+  --fused_mlp_fp8_direct_backward
+```
+
+For multi-resolution bucket training or a smaller GPU margin, change only:
+
+```bash
+--checkpoint_blocks=4
+```
+
+If `torch.compile` fails, remove the three compile flags and use the fallback
+recipe with `--checkpoint_blocks=8`. Do not enable `--fused_mlp_fp8_input` in
+the default recipe; it saves only about 100–130 MiB and adds reduced precision
+to the LoRA input-gradient path.
 
 ---
 
 ## Requirements & Fork Setup
 
-Clone the optimized fork containing native selective checkpointing controls:
+Clone the optimized fork containing the fused FP8/direct-backward and compile-compatible training controls:
 
 ```bash
-git clone -b feat/anima-selective-checkpointing https://github.com/ruwwww/sd-scripts.git sd-scripts
+git clone https://github.com/ruwwww/sd-scripts.git sd-scripts
 cd sd-scripts
 pip install -r requirements.txt
 ```
@@ -71,7 +107,15 @@ python sd-scripts/anima_train_network.py \
   --network_alpha=16.0 \
   --network_train_unet_only \
   --selective_checkpointing="count" \
-  --checkpoint_blocks=12 \
+  --checkpoint_blocks=1 \
+  --compile \
+  --compile_mode="default" \
+  --compile_cache_size_limit=32 \
+  --fused_lora \
+  --fused_mlp \
+  --fused_mlp_storage="fp8" \
+  --fused_mlp_fp8_backend="triton" \
+  --fused_mlp_fp8_direct_backward \
   --attn_mode="torch" \
   --optimizer_type="Prodigy" \
   --learning_rate=1.0 \
@@ -95,8 +139,10 @@ python sd-scripts/anima_train_network.py \
   --keep_tokens=1
 ```
 
-### Recipe B: Lightweight AdamW8bit (Fast & Low VRAM)
-Recommended for fast iterations and minimal adapter size (~13.8 MB with `dim=8`).
+### Recipe B: Legacy Lightweight AdamW8bit (Lowest-Risk Fallback)
+Keep this conservative variant for minimal adapter size (~13.8 MB with `dim=8`) or
+when the compiled fast path is unavailable. It intentionally retains 12/28
+checkpoints and excludes MLP LoRA; use Recipe A for the measured fastest path.
 
 ```bash
 python sd-scripts/anima_train_network.py \
@@ -136,5 +182,5 @@ python sd-scripts/anima_train_network.py \
 ## Companion Projects
 
 - [ComfyUI-Anima-BaryCache](https://github.com/ruwwww/ComfyUI-Anima-BaryCache): Inference acceleration node using stepwise barycentric extrapolation (2.24x speedup, down to ~8.4s per generation).
-- [anima-fastpath-recipe](https://github.com/ruwwww/anima-fastpath-recipe): Baseline eager & TorchCompile inference optimization recipes for Anima DiT.
+- [anima-lora-fastpath-recipe](https://github.com/ruwwww/anima-lora-fastpath-recipe): This training recipe repository.
 - [sd-scripts](https://github.com/ruwwww/sd-scripts): Optimized training scripts fork featuring selective gradient checkpointing.

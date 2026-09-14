@@ -26,7 +26,7 @@ mkdir -p "${COMFY_LORA_DIR}"
 echo "======================================================================"
 echo "[Anima DiT Fast-Path] Launching Optimized LoRA Training"
 echo "Target Hardware: RTX 5060 Ti 16GB (36 SMs, sm_120)"
-echo "Checkpointing: 12 / 28 Blocks (Sweet Spot, ~1.24x Speedup)"
+echo "Checkpointing: 1 / 28 Blocks with per-block torch.compile (~1.13s steady-state step)"
 echo "======================================================================"
 
 # Run Accelerated Training
@@ -40,7 +40,15 @@ echo "======================================================================"
   --network_alpha=16.0 \
   --network_train_unet_only \
   --selective_checkpointing="count" \
-  --checkpoint_blocks=12 \
+  --checkpoint_blocks=1 \
+  --compile \
+  --compile_mode="default" \
+  --compile_cache_size_limit=32 \
+  --fused_lora \
+  --fused_mlp \
+  --fused_mlp_storage="fp8" \
+  --fused_mlp_fp8_backend="triton" \
+  --fused_mlp_fp8_direct_backward \
   --attn_mode="torch" \
   --optimizer_type="Prodigy" \
   --learning_rate=1.0 \
