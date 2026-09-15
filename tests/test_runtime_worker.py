@@ -1,7 +1,8 @@
 import sys
+import json
 
 from runtime.database import RuntimeDatabase
-from runtime.worker import ColdWorker
+from runtime.worker import ColdWorker, WarmWorker
 
 
 def make_job(job_id, code):
@@ -83,3 +84,50 @@ def test_worker_retains_engine_affinity_between_jobs(tmp_path):
     worker.run_once()
 
     assert seen == ["warm-first", "warm-second"]
+
+
+def test_warm_worker_reuses_one_python_engine_for_same_engine_key(tmp_path):
+    database = RuntimeDatabase(tmp_path / "runtime.sqlite3")
+    database.submit(make_job("warm-first", "ok"), engine_key="engine-a")
+    database.submit(make_job("warm-second", "ok"), engine_key="engine-a")
+    output_file = tmp_path / "engine-pids.jsonl"
+    trainer = tmp_path / "trainer.py"
+    trainer.write_text(
+        "import json, os, pathlib\n"
+        "with pathlib.Path(os.environ['TEST_RUNTIME_OUTPUT']).open('a', encoding='utf-8') as stream:\n"
+        "    stream.write(json.dumps({'pid': os.getpid(), 'job': os.environ['ANIMA_RUNTIME_JOB_ID']}) + '\\n')\n",
+        encoding="utf-8",
+    )
+
+    worker = WarmWorker(
+        database,
+        worker_id="warm-worker",
+        trainer_script=str(trainer),
+        working_directory=tmp_path,
+        engine_cache_root=tmp_path / "engine-cache",
+        extra_environment={"TEST_RUNTIME_OUTPUT": str(output_file)},
+        poll_seconds=0.01,
+    )
+    try:
+        first = worker.run_once()
+        second = worker.run_once()
+    finally:
+        worker._stop_engine()
+
+    assert first is not None and first.state.value == "succeeded"
+    assert second is not None and second.state.value == "succeeded"
+    records = [json.loads(line) for line in output_file.read_text(encoding="utf-8").splitlines()]
+    assert [record["job"] for record in records] == ["warm-first", "warm-second"]
+    assert records[0]["pid"] == records[1]["pid"]
+
+
+def test_warm_only_without_engine_key_fails_before_starting_engine(tmp_path):
+    database = RuntimeDatabase(tmp_path / "runtime.sqlite3")
+    database.submit({**make_job("warm-only", "ok"), "engine_policy": "warm_only"})
+
+    worker = WarmWorker(database, trainer_script=str(tmp_path / "missing.py"))
+    result = worker.run_once()
+
+    assert result is not None
+    assert result.state.value == "failed"
+    assert "engine_key" in (result.error_message or "")

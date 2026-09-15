@@ -9,7 +9,7 @@ from pathlib import Path
 
 from .database import RuntimeDatabase
 from .preflight import validate_input_paths
-from .worker import ColdWorker
+from .worker import ColdWorker, WarmWorker
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -38,6 +38,10 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--worker-id", default=None)
     run.add_argument("--engine-cache-root", default="engine-cache")
     run.add_argument("--poll-seconds", type=float, default=2.0)
+    run.add_argument("--warm", action="store_true", help="keep one Python trainer engine for matching engine keys")
+    run.add_argument("--engine-script", default=None, help="override the persistent engine script used by --warm")
+    run.add_argument("--workdir", default=None, help="trainer working directory used by --warm")
+    run.add_argument("--empty-cache", action="store_true", help="empty the CUDA allocator between warm jobs")
     run.add_argument("--once", action="store_true", help="claim at most one job and exit when idle")
     return parser
 
@@ -61,6 +65,7 @@ def _record_dict(record):
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     database = RuntimeDatabase(args.database)
+    worker = None
     try:
         if args.command == "submit":
             try:
@@ -112,14 +117,23 @@ def main(argv: list[str] | None = None) -> int:
             return 0
 
         if args.command == "run":
-            worker = ColdWorker(
-                database,
-                worker_id=args.worker_id,
-                trainer_script=args.trainer,
-                python_executable=args.python_executable,
-                engine_cache_root=args.engine_cache_root,
-                poll_seconds=args.poll_seconds,
-            )
+            worker_type = WarmWorker if args.warm else ColdWorker
+            worker_kwargs = {
+                "worker_id": args.worker_id,
+                "trainer_script": args.trainer,
+                "python_executable": args.python_executable,
+                "engine_cache_root": args.engine_cache_root,
+                "poll_seconds": args.poll_seconds,
+            }
+            if args.warm:
+                worker_kwargs.update(
+                    {
+                        "engine_script": args.engine_script,
+                        "working_directory": args.workdir,
+                        "empty_cache": args.empty_cache,
+                    }
+                )
+            worker = worker_type(database, **worker_kwargs)
             if args.once:
                 worker.run_once()
             else:
@@ -128,6 +142,8 @@ def main(argv: list[str] | None = None) -> int:
 
         raise RuntimeError(f"unknown command: {args.command}")
     finally:
+        if worker is not None and hasattr(worker, "close"):
+            worker.close()
         database.close()
 
 
