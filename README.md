@@ -2,9 +2,15 @@
 
 A production-validated, hardware-optimized training recipe for **Anima Base v1.0** (Cosmos 2 DiT architecture) LoRA finetuning on consumer **16GB VRAM GPUs (NVIDIA GeForce RTX 5060 Ti / RTX 4080 / RTX 4070 Ti Super)**.
 
-By combining the [sd-scripts fork](https://github.com/ruwwww/sd-scripts) features for **explicit-VJP LoRA/MLP kernels**, **row-wise Triton FP8 activation storage**, **direct FP8 MLP backward**, selective checkpointing, and per-block `torch.compile`, this setup reaches **~1,134 ms/step** on the target RTX 5060 Ti. That is about **27–28% faster** than the uncompiled direct-FP8 count-8 recipe while using **~12.70 GiB peak allocation** and retaining **~3.07 GiB measured headroom** to the physical GPU limit.
+By combining the [sd-scripts fork](https://github.com/ruwwww/sd-scripts) features for **explicit-VJP LoRA/MLP kernels**, **row-wise Triton FP8 activation storage**, **direct FP8 MLP backward**, selective checkpointing, and per-block `torch.compile`, the fixed-bucket benchmark reaches **~1,134 ms/step** on the target RTX 5060 Ti. That is about **27–28% faster** than the uncompiled direct-FP8 benchmark at count 8 while using **~12.70 GiB peak allocation** and retaining **~3.07 GiB measured headroom** to the physical GPU limit.
 
-The timings below are steady-state measurements after JIT warmup. The first pass through each resolution bucket is slower because Inductor compiles the block.
+The timings below are steady-state measurements after JIT warmup on one native-resolution bucket. The first pass through each resolution bucket is slower because Inductor compiles the block. A real multi-bucket dataset includes those compilation passes and bucket-shape overhead: the 15-image Shemira validation run measured **~1.41 s/step overall** and spent **~44 s on the first compile-heavy step**. Do not use 1.134 s/step as an end-to-end ETA for a new multi-bucket dataset.
+
+## Important: invalidate pre-fix direct-FP8 outputs
+
+An early revision of `sd-scripts` had a correctness bug in the direct-FP8 MLP backward path: the second MLP LoRA down-gradient used the forward rank activation instead of its upstream gradient. Outputs trained with that revision can load successfully in ComfyUI while learning almost nothing. The regression is fixed in the current fork and covered by `tests/test_anima_fused_paths.py`; retrain adapters made before the fix.
+
+The fixed 20-step Shemira A/B check produced mean effective LoRA delta **0.0005286** versus **0.0005362** for the unfused reference (about **1.4%** difference), while the pre-fix fast path produced only **0.0000067**.
 
 ---
 
