@@ -91,7 +91,13 @@ class CompilerCache:
 
 
 def cache_environment(root: str | Path, signature: EngineSignature) -> dict[str, str]:
-    directory = Path(root) / signature.key
+    return cache_environment_for_key(root, signature.key)
+
+
+def cache_environment_for_key(root: str | Path, engine_key: str) -> dict[str, str]:
+    if not isinstance(engine_key, str) or not engine_key:
+        raise ValueError("engine_key must be a non-empty string")
+    directory = Path(root) / engine_key
     return {
         "TORCHINDUCTOR_CACHE_DIR": str(directory),
         "TORCHINDUCTOR_FX_GRAPH_CACHE": "1",
