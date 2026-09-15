@@ -1,5 +1,7 @@
 import sys
 import json
+import threading
+import time
 
 from runtime.database import RuntimeDatabase
 from runtime.worker import ColdWorker, WarmWorker
@@ -131,3 +133,34 @@ def test_warm_only_without_engine_key_fails_before_starting_engine(tmp_path):
     assert result is not None
     assert result.state.value == "failed"
     assert "engine_key" in (result.error_message or "")
+
+
+def test_warm_worker_cancels_at_protocol_boundary_and_discards_engine(tmp_path):
+    database = RuntimeDatabase(tmp_path / "runtime.sqlite3")
+    database.submit(make_job("cancel-me", "loop"), engine_key="engine-a")
+    trainer = tmp_path / "trainer.py"
+    trainer.write_text("import time\nwhile True: time.sleep(0.01)\n", encoding="utf-8")
+    worker = WarmWorker(
+        database,
+        worker_id="warm-worker",
+        trainer_script=str(trainer),
+        working_directory=tmp_path,
+        poll_seconds=0.01,
+    )
+    result_holder = []
+    thread = threading.Thread(target=lambda: result_holder.append(worker.run_once()))
+    thread.start()
+    try:
+        for _ in range(100):
+            if database.get("cancel-me").state.value == "running":
+                break
+            time.sleep(0.01)
+        assert database.request_cancel("cancel-me") is True
+        thread.join(timeout=10)
+    finally:
+        worker.close()
+
+    assert not thread.is_alive()
+    assert result_holder[0] is not None
+    assert result_holder[0].state.value == "cancelled"
+    assert worker._engine_process is None
