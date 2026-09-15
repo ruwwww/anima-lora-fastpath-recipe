@@ -45,11 +45,14 @@ class ColdWorker:
         self.poll_seconds = poll_seconds
         self.command_builder = command_builder
         self.extra_environment = dict(extra_environment or {})
+        self.current_engine_key: str | None = None
 
     def run_once(self) -> JobRecord | None:
-        job = self.database.claim_next(self.worker_id)
+        job = self.database.claim_next(self.worker_id, engine_key=self.current_engine_key)
         if job is None:
             return None
+        if job.engine_key:
+            self.current_engine_key = job.engine_key
 
         process: subprocess.Popen[bytes] | None = None
         cancel_sent = False
@@ -65,15 +68,16 @@ class ColdWorker:
             environment["ANIMA_RUNTIME_WORKER_ID"] = self.worker_id
             process = subprocess.Popen(command, env=environment)
 
-            while process.poll() is None:
-                current = self.database.get(job.job_id)
-                if current.state is JobState.CANCEL_REQUESTED and not cancel_sent:
-                    process.send_signal(signal.SIGINT)
-                    cancel_sent = True
-                self.database.heartbeat(job.job_id, self.worker_id)
-                time.sleep(self.poll_seconds)
-
-            return_code = process.wait()
+            while True:
+                try:
+                    return_code = process.wait(timeout=self.poll_seconds)
+                    break
+                except subprocess.TimeoutExpired:
+                    current = self.database.get(job.job_id)
+                    if current.state is JobState.CANCEL_REQUESTED and not cancel_sent:
+                        process.send_signal(signal.SIGINT)
+                        cancel_sent = True
+                    self.database.heartbeat(job.job_id, self.worker_id)
             current = self.database.get(job.job_id)
             if cancel_sent or current.state is JobState.CANCEL_REQUESTED:
                 return self.database.finish(

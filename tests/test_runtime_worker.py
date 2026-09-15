@@ -65,3 +65,21 @@ def test_worker_passes_engine_cache_environment_to_child(tmp_path):
 
     assert result.state.value == "succeeded"
     assert output_file.read_text(encoding="utf-8").endswith("engine-a")
+
+
+def test_worker_retains_engine_affinity_between_jobs(tmp_path):
+    database = RuntimeDatabase(tmp_path / "runtime.sqlite3")
+    database.submit(make_job("warm-first", "ok"), engine_key="engine-a")
+    database.submit(make_job("cold", "ok"), engine_key="engine-b")
+    database.submit(make_job("warm-second", "ok"), engine_key="engine-a")
+    seen = []
+
+    worker = ColdWorker(
+        database,
+        command_builder=lambda record: (seen.append(record.job_id) or [sys.executable, "-c", "raise SystemExit(0)"]),
+        poll_seconds=0.01,
+    )
+    worker.run_once()
+    worker.run_once()
+
+    assert seen == ["warm-first", "warm-second"]
