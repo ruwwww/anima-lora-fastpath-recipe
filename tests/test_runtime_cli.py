@@ -63,3 +63,45 @@ def test_cli_derives_engine_key_from_engine_config(tmp_path, capsys):
 
     assert status["engine_key"]
     assert len(status["engine_key"]) == 32
+
+
+def test_cli_runs_one_job_through_warm_worker(tmp_path, capsys):
+    database = tmp_path / "runtime.sqlite3"
+    job_file = tmp_path / "job.json"
+    trainer = tmp_path / "trainer.py"
+    output = tmp_path / "output.txt"
+    trainer.write_text(
+        f"import os, pathlib\npathlib.Path({str(output)!r}).write_text(os.environ['ANIMA_RUNTIME_JOB_ID'])\n",
+        encoding="utf-8",
+    )
+    job_file.write_text(
+        json.dumps(
+            {
+                "job_id": "job-a",
+                "trainer_argv": ["--noop"],
+                "metadata": {"engine_config": {"model": "anima", "resolution": [832, 1216]}},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert main(["--database", str(database), "submit", str(job_file)]) == 0
+    capsys.readouterr()
+    assert main(
+        [
+            "--database",
+            str(database),
+            "run",
+            "--trainer",
+            str(trainer),
+            "--workdir",
+            str(tmp_path),
+            "--warm",
+            "--once",
+        ]
+    ) == 0
+    capsys.readouterr()
+
+    assert output.read_text(encoding="utf-8") == "job-a"
+    assert main(["--database", str(database), "status", "job-a"]) == 0
+    assert "succeeded" in capsys.readouterr().out
