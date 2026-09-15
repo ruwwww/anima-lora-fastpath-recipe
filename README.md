@@ -89,6 +89,29 @@ cd sd-scripts
 pip install -r requirements.txt
 ```
 
+## Queueing multiple trainings with a warm Python engine
+
+For high GPU occupancy, the repository also includes a conservative SQLite
+queue and persistent Python worker in [`runtime/`](runtime/README.md). It keeps
+the trainer CLI unchanged while reusing the Python/TorchInductor process for
+jobs with the same deterministic `engine_key`; jobs with different topology
+profiles are isolated automatically.
+
+```bash
+export PYTHONPATH="$PWD"
+python -m runtime --database=/jobs/runtime.sqlite3 submit job.json --preflight
+python -m runtime --database=/jobs/runtime.sqlite3 run \
+  --trainer=/workspace/sd-scripts/anima_train_network.py \
+  --workdir=/workspace/sd-scripts \
+  --engine-cache-root=/jobs/engine-cache \
+  --warm
+```
+
+The warm layer currently reuses interpreter/import/compiler state, not the
+model or optimizer objects. This is intentional: the existing one-shot
+trainer still owns those lifecycles, while the runtime provides the stable
+queue and compatibility boundary for the next model-session phase.
+
 ---
 
 ## Recommended Training Recipes

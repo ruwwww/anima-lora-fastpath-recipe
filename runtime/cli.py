@@ -8,6 +8,7 @@ import sys
 from pathlib import Path
 
 from .database import RuntimeDatabase
+from .engine_key import build_engine_signature
 from .preflight import validate_input_paths
 from .worker import ColdWorker, WarmWorker
 
@@ -77,7 +78,13 @@ def main(argv: list[str] | None = None) -> int:
                         for error in errors:
                             print(f"- {error}", file=sys.stderr)
                         return 2
-                record = database.submit(raw_spec, engine_key=args.engine_key)
+                engine_key = args.engine_key
+                if engine_key is None:
+                    metadata = raw_spec.get("metadata", {})
+                    engine_config = metadata.get("engine_config") if isinstance(metadata, dict) else None
+                    if engine_config is not None:
+                        engine_key = build_engine_signature(engine_config).key
+                record = database.submit(raw_spec, engine_key=engine_key)
             except (OSError, json.JSONDecodeError, ValueError) as error:
                 print(f"submit failed: {error}", file=sys.stderr)
                 return 2
