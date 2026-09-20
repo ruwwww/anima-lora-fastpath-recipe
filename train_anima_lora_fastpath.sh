@@ -19,13 +19,14 @@ QWEN3_ENCODER="/mnt/data/models/text_encoders/qwen_3_06b_base.safetensors"
 QWEN_VAE="/home/kuroko/ComfyUI/models/vae/qwen_image_vae.safetensors"
 
 # Dataset Paths & Staging Link
-SOURCE_DATASET="/mnt/data/finetune-anima/staging_images/shemira"
-RUNTIME_PARENT="/mnt/data/finetune-anima/runtime_dataset/shemira"
-STAGING_LINK="${RUNTIME_PARENT}/10_shemira"
+SOURCE_DATASET="${SOURCE_DATASET:-/mnt/data/finetune-anima/staging_images/shemira}"
+RUNTIME_PARENT="${RUNTIME_PARENT:-/mnt/data/finetune-anima/runtime_dataset/shemira}"
+STAGING_LINK="${STAGING_LINK:-${RUNTIME_PARENT}/10_${CONCEPT_NAME:-shemira}}"
 TRIGGER="${TRIGGER:-shemira}"
+EPOCHS="${EPOCHS:-5}"
 CONCEPT_NAME="${CONCEPT_NAME:-shemira}"
-CURATED_ROOT="${CURATED_ROOT:-/mnt/data/finetune-anima/data_root_shemira_fastpath}"
-CURATED_DIR="${CURATED_ROOT}/10_${CONCEPT_NAME}"
+CURATED_ROOT="${CURATED_ROOT:-/mnt/data/finetune-anima/data_root_${CONCEPT_NAME}_fastpath}"
+CURATED_DIR="${CURATED_DIR:-${CURATED_ROOT}/10_${CONCEPT_NAME}}"
 
 # Caption policy. A no-caption dataset makes every sample use the same class
 # token, which can produce a numerically non-empty but practically ineffective
@@ -150,37 +151,37 @@ echo "    - mixed_precision=bf16, save_precision=bf16, attn_mode=torch"
 echo "  Training Dynamics:"
 echo "    - network_module=networks.lora_anima (dim=16, alpha=16.0, unet_only)"
 echo "    - optimizer=Prodigy (lr=1.0, cosine, warmup=10, weight_decay=0.1, decouple=True, d_coef=1.0)"
-echo "    - max_train_epochs=5, seed=2026, cache_latents_to_disk=True"
+echo "    - max_train_epochs=${EPOCHS}, seed=2026, cache_latents_to_disk=True"
 echo "======================================================================"
 
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
 "${PYTHON_ENV}" "${TRAINER_SCRIPT}" \
-  --pretrained_model_name_or_path="${DIT_MODEL}" \
-  --train_data_dir="${CURATED_ROOT}" \
-  --output_dir="${OUTPUT_DIR}" \
-  --output_name="${OUTPUT_NAME}" \
-  --network_module="networks.lora_anima" \
-  --network_dim=16 \
-  --network_alpha=16.0 \
-  --network_train_unet_only \
-  --selective_checkpointing="count" \
-  --checkpoint_blocks=1 \
-  --compile \
-  --compile_mode="default" \
-  --compile_cache_size_limit=32 \
-  --fused_lora \
-  --fused_mlp \
-  --fused_mlp_storage="fp8" \
-  --fused_mlp_fp8_backend="triton" \
-  --fused_mlp_fp8_direct_backward \
-  --attn_mode="torch" \
-  --optimizer_type="Prodigy" \
-  --learning_rate=1.0 \
-  --lr_scheduler="cosine" \
-  --lr_warmup_steps=10 \
-  --optimizer_args weight_decay=0.1 decouple=True use_bias_correction=True d_coef=1.0 \
-  --max_train_epochs=5 \
+--pretrained_model_name_or_path="${DIT_MODEL}" \
+--train_data_dir="${CURATED_ROOT}" \
+--output_dir="${OUTPUT_DIR}" \
+--output_name="${OUTPUT_NAME}" \
+--network_module="networks.lora_anima" \
+--network_dim=16 \
+--network_alpha=16.0 \
+--network_train_unet_only \
+--selective_checkpointing="count" \
+--checkpoint_blocks=1 \
+--compile \
+--compile_mode="default" \
+--compile_cache_size_limit=32 \
+--fused_lora \
+--fused_mlp \
+--fused_mlp_storage="fp8" \
+--fused_mlp_fp8_backend="triton" \
+--fused_mlp_fp8_direct_backward \
+--attn_mode="torch" \
+--optimizer_type="Prodigy" \
+--learning_rate=1.0 \
+--lr_scheduler="cosine" \
+--lr_warmup_steps=10 \
+--optimizer_args weight_decay=0.1 decouple=True use_bias_correction=True d_coef=1.0 \
+--max_train_epochs="${EPOCHS}" \
   --save_every_n_epochs=1 \
   --mixed_precision="bf16" \
   --save_precision="bf16" \

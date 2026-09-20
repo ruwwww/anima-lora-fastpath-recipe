@@ -57,6 +57,7 @@ class WarmPythonEngine:
                 os.chdir(self.working_directory)
             sys.argv = [str(script), *trainer_argv]
             os.environ["ANIMA_RUNTIME_JOB_ID"] = job_id
+            os.environ["ANIMA_PERSISTENT_SESSION"] = "1"
             runpy.run_path(str(script), run_name="__main__")
             return EngineResult(0)
         except SystemExit as error:
@@ -131,6 +132,12 @@ def run_server(
                     raise ValueError("request must be an object")
                 operation = request.get("operation", "run")
                 if operation == "shutdown":
+                    try:
+                        from library.anima_session import AnimaModelSession
+
+                        AnimaModelSession.close_active_session()
+                    except Exception:
+                        pass
                     return 0
                 if operation != "run":
                     raise ValueError(f"unknown operation: {operation}")
@@ -165,6 +172,12 @@ def run_server(
                     {"event": "error", "return_code": 1, "reusable": False, "error": str(error)},
                 )
     finally:
+        try:
+            from library.anima_session import AnimaModelSession
+
+            AnimaModelSession.close_active_session()
+        except Exception:
+            pass
         response_stream.close()
     return 0
 
